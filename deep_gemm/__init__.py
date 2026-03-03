@@ -63,7 +63,8 @@ try:
         tf32_hc_prenorm_gemm,
         # Layout kernels
         transform_sf_into_required_layout,
-        get_mk_alignment_for_contiguous_layout
+        get_mk_alignment_for_contiguous_layout,
+        warmup_kernels
     )
 
     # Some alias for legacy supports

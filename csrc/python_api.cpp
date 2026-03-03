@@ -7,6 +7,7 @@
 #include "apis/gemm.hpp"
 #include "apis/layout.hpp"
 #include "apis/runtime.hpp"
+#include "apis/warmup.hpp"
 
 #ifndef TORCH_EXTENSION_NAME
 #define TORCH_EXTENSION_NAME _C
@@ -23,4 +24,5 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     deep_gemm::gemm::register_apis(m);
     deep_gemm::layout::register_apis(m);
     deep_gemm::runtime::register_apis(m);
+    deep_gemm::warmup::register_apis(m);
 }

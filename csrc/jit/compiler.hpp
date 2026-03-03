@@ -98,14 +98,43 @@ public:
         std::filesystem::rename(tmp_file_path, path);
     }
 
+    // Ensure a kernel is compiled and cached on disk, without loading it into GPU memory.
+    // Returns true if the kernel was already cached (no compilation needed).
+    bool ensure_compiled(const std::string& name, const std::string& code) const {
+        const auto dir_path = get_cache_dir(name, code);
+
+        // Already compiled on disk (cheap stat check)
+        if (KernelRuntime::check_validity(dir_path))
+            return true;
+
+        compile_to_disk(name, code, dir_path);
+        return false;
+    }
+
     std::shared_ptr<KernelRuntime> build(const std::string& name, const std::string& code) const {
-        const auto kernel_signature = fmt::format("{}$${}$${}$${}$${}", name, library_version, signature, flags, code);
-        const auto dir_path = cache_dir_path / "cache" / fmt::format("kernel.{}.{}", name, get_hex_digest(kernel_signature));
+        const auto dir_path = get_cache_dir(name, code);
 
         // Hit the runtime cache
         if (const auto& runtime = kernel_runtime_cache->get(dir_path); runtime != nullptr)
             return runtime;
 
+        // Compile if not already on disk
+        if (not KernelRuntime::check_validity(dir_path))
+            compile_to_disk(name, code, dir_path);
+
+        // Put into the runtime cache (loads cubin into GPU)
+        const auto runtime = kernel_runtime_cache->get(dir_path);
+        DG_HOST_ASSERT(runtime != nullptr);
+        return runtime;
+    }
+
+private:
+    std::filesystem::path get_cache_dir(const std::string& name, const std::string& code) const {
+        const auto kernel_signature = fmt::format("{}$${}$${}$${}$${}", name, library_version, signature, flags, code);
+        return cache_dir_path / "cache" / fmt::format("kernel.{}.{}", name, get_hex_digest(kernel_signature));
+    }
+
+    void compile_to_disk(const std::string& name, const std::string& code, const std::filesystem::path& dir_path) const {
         // Create the kernel directory
         make_dirs(dir_path);
 
@@ -135,12 +164,9 @@ public:
             // Replace into the current directory
             std::filesystem::rename(tmp_sass_path, dir_path / "kernel.sass");
         }
-
-        // Put into the runtime cache
-        const auto runtime = kernel_runtime_cache->get(dir_path);
-        DG_HOST_ASSERT(runtime != nullptr);
-        return runtime;
     }
+
+public:
 
     static void disassemble(const std::filesystem::path &cubin_path, const std::filesystem::path &sass_path) {
         // Disassemble the CUBIN file to SASS
