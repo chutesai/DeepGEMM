@@ -134,6 +134,29 @@ private:
         return cache_dir_path / "cache" / fmt::format("kernel.{}.{}", name, get_hex_digest(kernel_signature));
     }
 
+    // Extract the kernel entry point symbol name from a cubin file using cuobjdump.
+    // This forks a subprocess, so results should be cached to avoid repeated calls.
+    std::string extract_symbol_name(const std::filesystem::path& cubin_path) const {
+        const auto& [exit_code, symbols] = call_external_command(
+            fmt::format("{} -symbols {}", cuobjdump_path.c_str(), cubin_path.c_str()));
+        DG_HOST_ASSERT(exit_code == 0);
+
+        const std::vector<std::string> illegal_names = {
+            "vprintf", "__instantiate_kernel", "__internal", "__assertfail"};
+        std::istringstream iss(symbols);
+        std::vector<std::string> symbol_names;
+        for (std::string line; std::getline(iss, line); ) {
+            if (line.find("STT_FUNC") == 0 and line.find("STO_ENTRY") != std::string::npos and
+                std::none_of(illegal_names.begin(), illegal_names.end(),
+                [&](const auto& n) { return line.find(n) != std::string::npos; })) {
+                const auto& last_space = line.rfind(' ');
+                symbol_names.push_back(line.substr(last_space + 1));
+            }
+        }
+        DG_HOST_ASSERT(symbol_names.size() == 1);
+        return symbol_names[0];
+    }
+
     void compile_to_disk(const std::string& name, const std::string& code, const std::filesystem::path& dir_path) const {
         // Create the kernel directory
         make_dirs(dir_path);
@@ -154,6 +177,12 @@ private:
         // Replace into the cache directory
         const auto cubin_path = dir_path / "kernel.cubin";
         std::filesystem::rename(tmp_cubin_path, cubin_path);
+
+        // Extract and cache the kernel symbol name so KernelRuntime can load
+        // without forking cuobjdump (important for TEE/TDX environments where
+        // process creation is very expensive).
+        const auto& symbol_name = extract_symbol_name(cubin_path);
+        put(dir_path / "kernel.sym", symbol_name);
 
         // Disassemble if needed
         if (get_env<int>("DG_JIT_DUMP_ASM") or get_env<int>("DG_JIT_DUMP_SASS")) {

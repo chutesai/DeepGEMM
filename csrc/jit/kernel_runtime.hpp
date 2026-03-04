@@ -32,37 +32,51 @@ public:
         // Check `prepare_init`
         DG_HOST_ASSERT(not cuda_home.empty());
 
-        // NOLINT(*-pro-type-member-init)
-        const auto& cuobjdump_path = cuda_home / "bin" / "cuobjdump";
         const auto& cubin_path = dir_path / "kernel.cubin";
         if (get_env<int>("DG_JIT_DEBUG"))
             printf("Loading CUBIN: %s\n", cubin_path.c_str());
 
-        // Find the only symbol
-        // TODO: use kernel enumeration for newer drivers
-        const std::vector<std::string> illegal_names = {"vprintf", "__instantiate_kernel", "__internal", "__assertfail"};
-        const auto& [exit_code, symbols] = call_external_command(fmt::format("{} -symbols {}", cuobjdump_path.c_str(), cubin_path.c_str()));
-        DG_HOST_ASSERT(exit_code == 0);
-        std::istringstream iss(symbols);
-        std::vector<std::string> symbol_names;
-        for (std::string line; std::getline(iss, line); ) {
-            if (line.find("STT_FUNC") == 0 and line.find("STO_ENTRY") != std::string::npos and
-                std::none_of(illegal_names.begin(), illegal_names.end(),
-                [&](const auto& name) { return line.find(name) != std::string::npos; })) {
-                const auto& last_space = line.rfind(' ');
-                symbol_names.push_back(line.substr(last_space + 1));
+        // Read the cached symbol name if available (avoids forking cuobjdump,
+        // which is critical for TEE/TDX environments where fork is very expensive).
+        const auto& sym_path = dir_path / "kernel.sym";
+        std::string func_name;
+        if (std::filesystem::exists(sym_path)) {
+            std::ifstream in(sym_path);
+            std::getline(in, func_name);
+        } else {
+            // Fallback for old cache entries without kernel.sym:
+            // extract symbol name via cuobjdump subprocess
+            const auto& cuobjdump_path = cuda_home / "bin" / "cuobjdump";
+            const std::vector<std::string> illegal_names = {
+                "vprintf", "__instantiate_kernel", "__internal", "__assertfail"};
+            const auto& [exit_code, symbols] = call_external_command(
+                fmt::format("{} -symbols {}", cuobjdump_path.c_str(), cubin_path.c_str()));
+            DG_HOST_ASSERT(exit_code == 0);
+            std::istringstream iss(symbols);
+            std::vector<std::string> symbol_names;
+            for (std::string line; std::getline(iss, line); ) {
+                if (line.find("STT_FUNC") == 0 and line.find("STO_ENTRY") != std::string::npos and
+                    std::none_of(illegal_names.begin(), illegal_names.end(),
+                    [&](const auto& name) { return line.find(name) != std::string::npos; })) {
+                    const auto& last_space = line.rfind(' ');
+                    symbol_names.push_back(line.substr(last_space + 1));
+                }
             }
-        }
-        if (get_env<int>("DG_JIT_DEBUG")) {
-            printf("Symbol names: ");
-            for (const auto& symbol: symbol_names)
-                printf("%s, ", symbol.c_str());
-            printf("\n");
+            DG_HOST_ASSERT(symbol_names.size() == 1);
+            func_name = symbol_names[0];
+
+            // Upgrade old cache: write kernel.sym so next load skips cuobjdump
+            std::ofstream out(sym_path, std::ios::binary);
+            if (out.is_open())
+                out << func_name;
         }
 
+        if (get_env<int>("DG_JIT_DEBUG"))
+            printf("Kernel symbol: %s\n", func_name.c_str());
+
         // Load from the library
-        DG_HOST_ASSERT(symbol_names.size() == 1);
-        kernel = load_kernel(cubin_path, symbol_names[0], &library);
+        DG_HOST_ASSERT(not func_name.empty());
+        kernel = load_kernel(cubin_path, func_name, &library);
     }
 
     static void prepare_init(const std::string& cuda_home_path_by_python) {
