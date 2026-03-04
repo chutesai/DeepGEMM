@@ -360,7 +360,8 @@ static void register_apis(pybind11::module_& m) {
           py::arg("n"),
           py::arg("k"),
           py::arg("num_groups"),
-          py::arg("compiled_dims") = "nk");
+          py::arg("compiled_dims") = "nk",
+          py::call_guard<py::gil_scoped_release>());
 #endif
 }
 
