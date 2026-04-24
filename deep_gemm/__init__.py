@@ -19,6 +19,10 @@ from ._C import (
     get_num_sms,
     set_tc_util,
     get_tc_util,
+    set_ignore_compile_dims,
+    set_block_size_multiple_of,
+    set_pdl,
+    get_pdl,
 )
 
 # cuBLASLt Kernels
@@ -56,8 +60,11 @@ try:
         einsum,
         fp8_einsum,
         # Attention kernels
-        fp8_mqa_logits,
+        fp8_fp4_mqa_logits,
         get_paged_mqa_logits_metadata,
+        fp8_fp4_paged_mqa_logits,
+        # Attention kernels (legacy)
+        fp8_mqa_logits,
         fp8_paged_mqa_logits,
         # Hyperconnection kernels
         tf32_hc_prenorm_gemm,
@@ -74,6 +81,14 @@ try:
 except ImportError:
     # Expected behavior for CUDA runtime version before 12.1
     pass
+
+# Mega kernels
+from .mega import (
+    SymmBuffer,
+    get_symm_buffer_for_mega_moe,
+    transform_weights_for_mega_moe,
+    fp8_fp4_mega_moe,
+)
 
 # Some utils
 from . import testing
@@ -110,4 +125,4 @@ _C.init(
     _find_cuda_home()                           # CUDA home
 )
 
-__version__ = '2.3.0'
+__version__ = '2.4.2'
