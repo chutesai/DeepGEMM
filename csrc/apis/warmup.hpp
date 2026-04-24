@@ -14,7 +14,7 @@
 #include "../jit_kernels/impls/sm90_fp8_gemm_1d1d.hpp"
 #include "../jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp"
 #include "../jit_kernels/impls/sm90_bf16_gemm.hpp"
-#include "../jit_kernels/impls/sm100_fp8_gemm_1d1d.hpp"
+#include "../jit_kernels/impls/sm100_fp8_fp4_gemm_1d1d.hpp"
 #include "../jit_kernels/impls/sm100_bf16_gemm.hpp"
 #endif
 
@@ -34,6 +34,7 @@ static int warmup_kernels(
 {
     const auto arch_major = device_runtime->get_arch_major();
     const auto num_sms = device_runtime->get_num_sms();
+    const auto tc_util = device_runtime->get_tc_util();
 
     auto t_start = std::chrono::steady_clock::now();
 
@@ -62,14 +63,18 @@ static int warmup_kernels(
         if (kernel_type == "fp8_gemm_nt") {
             // Normal FP8 GEMM: a=fp8, b=fp8, cd=float, with_accumulation=true
             if (arch_major == 9) {
-                const auto& config = get_best_config<SM90ArchSpec>(
-                    GemmType::Normal, KernelType::Kernel1D1D,
-                    m, n, k, 1, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kFloat8_e4m3fn, torch::kFloat8_e4m3fn,
-                    torch::kFloat, true, num_sms);
-                const SM90FP8Gemm1D1DRuntime::Args args = {
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::Normal, .kernel_type = KernelType::Kernel1D1D,
                     .m = m, .n = n, .k = k, .num_groups = 1,
-                    .compiled_dims = compiled_dims,
+                    .a_dtype = torch::kFloat8_e4m3fn, .b_dtype = torch::kFloat8_e4m3fn,
+                    .cd_dtype = torch::kFloat,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = true,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM90ArchSpec>(desc);
+                const SM90FP8Gemm1D1DRuntime::Args args = {
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
                     .gmem_a_ptr = nullptr, .gmem_b_ptr = nullptr,
@@ -81,18 +86,22 @@ static int warmup_kernels(
                 code = SM90FP8Gemm1D1DRuntime::generate(args);
                 kernel_name = "sm90_fp8_gemm_1d1d";
             } else if (arch_major == 10) {
-                const auto& config = get_best_config<SM100ArchSpec>(
-                    GemmType::Normal, KernelType::Kernel1D1D,
-                    m, n, k, 1, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kFloat8_e4m3fn, torch::kFloat8_e4m3fn,
-                    torch::kFloat, true, num_sms);
-                const SM100FP8FP4Gemm1D1DRuntime::Args args = {
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::Normal, .kernel_type = KernelType::Kernel1D1D,
                     .m = m, .n = n, .k = k, .num_groups = 1,
-                    .gran_k_a = 128, .gran_k_b = 128,
-                    .compiled_dims = compiled_dims,
-                    .epilogue_type = no_epilogue,
+                    .a_dtype = torch::kFloat8_e4m3fn, .b_dtype = torch::kFloat8_e4m3fn,
+                    .cd_dtype = torch::kFloat,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = true,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM100ArchSpec>(desc);
+                const SM100FP8FP4Gemm1D1DRuntime::Args args = {
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
+                    .epilogue_type = no_epilogue,
+                    .gran_k_a = 128, .gran_k_b = 128,
                     .grouped_layout = nullptr,
                     .tensor_map_a = zero_tm, .tensor_map_b = zero_tm,
                     .tensor_map_sfa = zero_tm, .tensor_map_sfb = zero_tm,
@@ -105,18 +114,22 @@ static int warmup_kernels(
             // Masked grouped FP8 GEMM: a=fp8, b=fp8, cd=bf16, with_accumulation=false
             // m_list values are expected_m values
             if (arch_major == 9) {
-                const auto& config = get_best_config<SM90ArchSpec>(
-                    GemmType::MGroupedMasked, KernelType::Kernel1D2D,
-                    m, n, k, num_groups, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kFloat8_e4m3fn, torch::kFloat8_e4m3fn,
-                    torch::kBFloat16, false, num_sms);
-                const SM90FP8Gemm1D2DRuntime::Args args = {
-                    .major_sfb = cute::UMMA::Major::K,
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::MGroupedMasked, .kernel_type = KernelType::Kernel1D2D,
                     .m = m, .n = n, .k = k, .num_groups = num_groups,
-                    .compiled_dims = compiled_dims,
-                    .epilogue_type = no_epilogue,
+                    .a_dtype = torch::kFloat8_e4m3fn, .b_dtype = torch::kFloat8_e4m3fn,
+                    .cd_dtype = torch::kBFloat16,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM90ArchSpec>(desc);
+                const SM90FP8Gemm1D2DRuntime::Args args = {
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
+                    .epilogue_type = no_epilogue,
+                    .major_sfb = cute::UMMA::Major::K,
                     .sfb = nullptr, .grouped_layout = nullptr,
                     .tensor_map_a = zero_tm, .tensor_map_b = zero_tm,
                     .tensor_map_d = zero_tm, .tensor_map_sfa = zero_tm,
@@ -124,18 +137,22 @@ static int warmup_kernels(
                 code = SM90FP8Gemm1D2DRuntime::generate(args);
                 kernel_name = "sm90_fp8_m_grouped_gemm_masked_1d2d";
             } else if (arch_major == 10) {
-                const auto& config = get_best_config<SM100ArchSpec>(
-                    GemmType::MGroupedMasked, KernelType::Kernel1D1D,
-                    m, n, k, num_groups, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kFloat8_e4m3fn, torch::kFloat8_e4m3fn,
-                    torch::kBFloat16, false, num_sms);
-                const SM100FP8FP4Gemm1D1DRuntime::Args args = {
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::MGroupedMasked, .kernel_type = KernelType::Kernel1D1D,
                     .m = m, .n = n, .k = k, .num_groups = num_groups,
-                    .gran_k_a = 128, .gran_k_b = 128,
-                    .compiled_dims = compiled_dims,
-                    .epilogue_type = no_epilogue,
+                    .a_dtype = torch::kFloat8_e4m3fn, .b_dtype = torch::kFloat8_e4m3fn,
+                    .cd_dtype = torch::kBFloat16,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM100ArchSpec>(desc);
+                const SM100FP8FP4Gemm1D1DRuntime::Args args = {
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
+                    .epilogue_type = no_epilogue,
+                    .gran_k_a = 128, .gran_k_b = 128,
                     .grouped_layout = nullptr,
                     .tensor_map_a = zero_tm, .tensor_map_b = zero_tm,
                     .tensor_map_sfa = zero_tm, .tensor_map_sfb = zero_tm,
@@ -148,18 +165,22 @@ static int warmup_kernels(
             // Contiguous grouped FP8 GEMM: a=fp8, b=fp8, cd=bf16, with_accumulation=false
             // get_best_config uses num_groups=1 (contiguous layout is treated as a whole)
             if (arch_major == 9) {
-                const auto& config = get_best_config<SM90ArchSpec>(
-                    GemmType::MGroupedContiguous, KernelType::Kernel1D2D,
-                    m, n, k, 1, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kFloat8_e4m3fn, torch::kFloat8_e4m3fn,
-                    torch::kBFloat16, false, num_sms);
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::MGroupedContiguous, .kernel_type = KernelType::Kernel1D2D,
+                    .m = m, .n = n, .k = k, .num_groups = 1,
+                    .a_dtype = torch::kFloat8_e4m3fn, .b_dtype = torch::kFloat8_e4m3fn,
+                    .cd_dtype = torch::kBFloat16,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM90ArchSpec>(desc);
                 const SM90FP8Gemm1D2DRuntime::Args args = {
-                    .major_sfb = cute::UMMA::Major::K,
-                    .m = m, .n = n, .k = k, .num_groups = num_groups,
-                    .compiled_dims = compiled_dims,
-                    .epilogue_type = no_epilogue,
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
+                    .epilogue_type = no_epilogue,
+                    .major_sfb = cute::UMMA::Major::K,
                     .sfb = nullptr, .grouped_layout = nullptr,
                     .tensor_map_a = zero_tm, .tensor_map_b = zero_tm,
                     .tensor_map_d = zero_tm, .tensor_map_sfa = zero_tm,
@@ -167,18 +188,22 @@ static int warmup_kernels(
                 code = SM90FP8Gemm1D2DRuntime::generate(args);
                 kernel_name = "sm90_m_grouped_fp8_gemm_contiguous_1d2d";
             } else if (arch_major == 10) {
-                const auto& config = get_best_config<SM100ArchSpec>(
-                    GemmType::MGroupedContiguous, KernelType::Kernel1D1D,
-                    m, n, k, 1, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kFloat8_e4m3fn, torch::kFloat8_e4m3fn,
-                    torch::kBFloat16, false, num_sms);
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::MGroupedContiguous, .kernel_type = KernelType::Kernel1D1D,
+                    .m = m, .n = n, .k = k, .num_groups = 1,
+                    .a_dtype = torch::kFloat8_e4m3fn, .b_dtype = torch::kFloat8_e4m3fn,
+                    .cd_dtype = torch::kBFloat16,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM100ArchSpec>(desc);
                 const SM100FP8FP4Gemm1D1DRuntime::Args args = {
-                    .m = m, .n = n, .k = k, .num_groups = num_groups,
-                    .gran_k_a = 128, .gran_k_b = 128,
-                    .compiled_dims = compiled_dims,
-                    .epilogue_type = no_epilogue,
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
+                    .epilogue_type = no_epilogue,
+                    .gran_k_a = 128, .gran_k_b = 128,
                     .grouped_layout = nullptr,
                     .tensor_map_a = zero_tm, .tensor_map_b = zero_tm,
                     .tensor_map_sfa = zero_tm, .tensor_map_sfb = zero_tm,
@@ -190,14 +215,18 @@ static int warmup_kernels(
         } else if (kernel_type == "bf16_gemm_nt") {
             // Normal BF16 GEMM: a=bf16, b=bf16, cd=float, with_accumulation=false
             if (arch_major == 9) {
-                const auto& config = get_best_config<SM90ArchSpec>(
-                    GemmType::Normal, KernelType::KernelNoSF,
-                    m, n, k, 1, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kBFloat16, torch::kBFloat16,
-                    torch::kFloat, false, num_sms);
-                const SM90BF16GemmRuntime::Args args = {
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::Normal, .kernel_type = KernelType::KernelNoSF,
                     .m = m, .n = n, .k = k, .num_groups = 1,
-                    .compiled_dims = compiled_dims,
+                    .a_dtype = torch::kBFloat16, .b_dtype = torch::kBFloat16,
+                    .cd_dtype = torch::kFloat,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM90ArchSpec>(desc);
+                const SM90BF16GemmRuntime::Args args = {
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
                     .grouped_layout = nullptr,
@@ -207,14 +236,18 @@ static int warmup_kernels(
                 code = SM90BF16GemmRuntime::generate(args);
                 kernel_name = "sm90_bf16_gemm";
             } else if (arch_major == 10) {
-                const auto& config = get_best_config<SM100ArchSpec>(
-                    GemmType::Normal, KernelType::KernelNoSF,
-                    m, n, k, 1, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kBFloat16, torch::kBFloat16,
-                    torch::kFloat, false, num_sms);
-                const SM100BF16GemmRuntime::Args args = {
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::Normal, .kernel_type = KernelType::KernelNoSF,
                     .m = m, .n = n, .k = k, .num_groups = 1,
-                    .compiled_dims = compiled_dims,
+                    .a_dtype = torch::kBFloat16, .b_dtype = torch::kBFloat16,
+                    .cd_dtype = torch::kFloat,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM100ArchSpec>(desc);
+                const SM100BF16GemmRuntime::Args args = {
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
                     .grouped_layout = nullptr,
@@ -228,14 +261,18 @@ static int warmup_kernels(
             // Masked grouped BF16 GEMM: a=bf16, b=bf16, cd=bf16, with_accumulation=false
             // m_list values are expected_m values
             if (arch_major == 9) {
-                const auto& config = get_best_config<SM90ArchSpec>(
-                    GemmType::MGroupedMasked, KernelType::KernelNoSF,
-                    m, n, k, num_groups, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kBFloat16, torch::kBFloat16,
-                    torch::kBFloat16, false, num_sms);
-                const SM90BF16GemmRuntime::Args args = {
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::MGroupedMasked, .kernel_type = KernelType::KernelNoSF,
                     .m = m, .n = n, .k = k, .num_groups = num_groups,
-                    .compiled_dims = compiled_dims,
+                    .a_dtype = torch::kBFloat16, .b_dtype = torch::kBFloat16,
+                    .cd_dtype = torch::kBFloat16,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM90ArchSpec>(desc);
+                const SM90BF16GemmRuntime::Args args = {
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
                     .grouped_layout = nullptr,
@@ -245,14 +282,18 @@ static int warmup_kernels(
                 code = SM90BF16GemmRuntime::generate(args);
                 kernel_name = "sm90_bf16_m_grouped_gemm_masked";
             } else if (arch_major == 10) {
-                const auto& config = get_best_config<SM100ArchSpec>(
-                    GemmType::MGroupedMasked, KernelType::KernelNoSF,
-                    m, n, k, num_groups, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kBFloat16, torch::kBFloat16,
-                    torch::kBFloat16, false, num_sms);
-                const SM100BF16GemmRuntime::Args args = {
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::MGroupedMasked, .kernel_type = KernelType::KernelNoSF,
                     .m = m, .n = n, .k = k, .num_groups = num_groups,
-                    .compiled_dims = compiled_dims,
+                    .a_dtype = torch::kBFloat16, .b_dtype = torch::kBFloat16,
+                    .cd_dtype = torch::kBFloat16,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM100ArchSpec>(desc);
+                const SM100BF16GemmRuntime::Args args = {
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
                     .grouped_layout = nullptr,
@@ -266,14 +307,18 @@ static int warmup_kernels(
             // Contiguous grouped BF16 GEMM: a=bf16, b=bf16, cd=bf16, with_accumulation=false
             // get_best_config uses num_groups=1
             if (arch_major == 9) {
-                const auto& config = get_best_config<SM90ArchSpec>(
-                    GemmType::MGroupedContiguous, KernelType::KernelNoSF,
-                    m, n, k, 1, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kBFloat16, torch::kBFloat16,
-                    torch::kBFloat16, false, num_sms);
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::MGroupedContiguous, .kernel_type = KernelType::KernelNoSF,
+                    .m = m, .n = n, .k = k, .num_groups = 1,
+                    .a_dtype = torch::kBFloat16, .b_dtype = torch::kBFloat16,
+                    .cd_dtype = torch::kBFloat16,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM90ArchSpec>(desc);
                 const SM90BF16GemmRuntime::Args args = {
-                    .m = m, .n = n, .k = k, .num_groups = num_groups,
-                    .compiled_dims = compiled_dims,
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
                     .grouped_layout = nullptr,
@@ -283,14 +328,18 @@ static int warmup_kernels(
                 code = SM90BF16GemmRuntime::generate(args);
                 kernel_name = "sm90_m_grouped_bf16_gemm_contiguous";
             } else if (arch_major == 10) {
-                const auto& config = get_best_config<SM100ArchSpec>(
-                    GemmType::MGroupedContiguous, KernelType::KernelNoSF,
-                    m, n, k, 1, cute::UMMA::Major::K, cute::UMMA::Major::K,
-                    torch::kBFloat16, torch::kBFloat16,
-                    torch::kBFloat16, false, num_sms);
+                const auto desc = GemmDesc {
+                    .gemm_type = GemmType::MGroupedContiguous, .kernel_type = KernelType::KernelNoSF,
+                    .m = m, .n = n, .k = k, .num_groups = 1,
+                    .a_dtype = torch::kBFloat16, .b_dtype = torch::kBFloat16,
+                    .cd_dtype = torch::kBFloat16,
+                    .major_a = cute::UMMA::Major::K, .major_b = cute::UMMA::Major::K,
+                    .with_accumulation = false,
+                    .num_sms = num_sms, .tc_util = tc_util, .compiled_dims = compiled_dims
+                };
+                const auto config = get_best_config<SM100ArchSpec>(desc);
                 const SM100BF16GemmRuntime::Args args = {
-                    .m = m, .n = n, .k = k, .num_groups = num_groups,
-                    .compiled_dims = compiled_dims,
+                    .gemm_desc = desc,
                     .gemm_config = config,
                     .launch_args = LaunchArgs(1, 1),
                     .grouped_layout = nullptr,
