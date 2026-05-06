@@ -211,10 +211,16 @@ static torch::Tensor get_paged_mqa_logits_metadata(const torch::Tensor& context_
         DG_HOST_ASSERT(indices_tensor.dim() == 1 and indices_tensor.size(0) == batch_size);
         DG_HOST_ASSERT(indices_tensor.is_contiguous());
         DG_HOST_ASSERT(indices_tensor.scalar_type() == torch::kInt);
-        smxx_paged_mqa_logits_metadata(context_lens, schedule_metadata, batch_size, next_n, block_kv, num_sms, is_context_lens_2d, true, indices_tensor.data_ptr<int>());
+        smxx_paged_mqa_logits_metadata(context_lens, schedule_metadata, batch_size, next_n, block_kv, num_sms, is_context_lens_2d, 1, true, indices_tensor.data_ptr<int>());
     } else if (arch_major == 9 or arch_major == 10) {
         DG_HOST_ASSERT(block_kv == 64 or (arch_major == 10 and block_kv == 32));
-        smxx_paged_mqa_logits_metadata(context_lens, schedule_metadata, batch_size, next_n, block_kv, num_sms, is_context_lens_2d, false, nullptr);
+        // Match the kernel-side formula:
+        //   kNextNAtom = (kNextN >= 2) ? 2 : 1
+        //   kNumNextNAtoms = ceil_div(kNextN, kNextNAtom)
+        // SM90 always uses kNumNextNAtoms=1 (processes full next_n per warp group).
+        const int next_n_atom = (next_n >= 2) ? 2 : 1;
+        const int num_next_n_atoms = (arch_major == 9) ? 1 : (next_n + next_n_atom - 1) / next_n_atom;
+        smxx_paged_mqa_logits_metadata(context_lens, schedule_metadata, batch_size, next_n, block_kv, num_sms, is_context_lens_2d, num_next_n_atoms, false, nullptr);
     } else {
         DG_HOST_UNREACHABLE("Unsupported architecture");
     }

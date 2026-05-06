@@ -18,6 +18,7 @@ public:
 
         int batch_size;
         int next_n;
+        int num_next_n_atoms;
         bool is_context_lens_2d;
         int* context_lens;
         int* indices;
@@ -45,6 +46,7 @@ static void __instantiate_kernel() {{
             args.batch_size,
             args.next_n,
             args.is_context_lens_2d,
+            static_cast<uint32_t>(args.num_next_n_atoms),
             args.context_lens,
             args.indices,
             args.schedule_metadata
@@ -57,6 +59,7 @@ static void smxx_paged_mqa_logits_metadata(const torch::Tensor& context_lens,
                                            const int& batch_size, const int& next_n,
                                            const int& block_kv, const int& num_sms,
                                            const bool& is_context_lens_2d,
+                                           const int& num_next_n_atoms,
                                            const bool& is_varlen, const int* indices_ptr) {
     constexpr int split_kv = 256;
     constexpr int num_threads = 32;
@@ -76,6 +79,7 @@ static void smxx_paged_mqa_logits_metadata(const torch::Tensor& context_lens,
         .is_varlen = is_varlen,
         .batch_size = batch_size,
         .next_n = next_n,
+        .num_next_n_atoms = num_next_n_atoms,
         .is_context_lens_2d = is_context_lens_2d,
         .context_lens = context_lens.data_ptr<int>(),
         .indices = const_cast<int*>(indices_ptr),
